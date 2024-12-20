@@ -40,9 +40,8 @@ std::vector<test_combination> prepare_combinations(const std::vector<std::vector
 
 // Runs the Winnow algorithm sequentially several times with different block sizes
 size_t run_trial(const int *const alice_bit_array, const int *const bob_bit_array, size_t array_length,
-                 const std::vector<size_t> &trial_combination, bool shuffle_bits, int *const output_alice_bit_array, int *const output_bob_bit_array)
+                 const std::vector<size_t> &trial_combination, bool shuffle_bits, size_t seed, int *const output_alice_bit_array, int *const output_bob_bit_array)
 {
-    size_t seed = CFG.SIMULATION_SEED;
     size_t block_length = 0;
     size_t last_incompl_block_length = 0;
     size_t padding_length = 0;
@@ -67,7 +66,7 @@ size_t run_trial(const int *const alice_bit_array, const int *const bob_bit_arra
             if(last_incompl_block_length > 0)   // Padding 
             {
                 padding_length = block_length - last_incompl_block_length;
-                if(result_array_length + padding_length >= array_length)    // If padding extends beyond the initial array, the last block is cut off
+                if(result_array_length + padding_length > array_length)    // If padding extends beyond the initial array, the last block is cut off
                 {
                      result_array_length -= last_incompl_block_length;
                 }
@@ -140,12 +139,13 @@ test_result run_test(const test_combination combination, size_t seed)
 
     // Pseudo-random number generator
     XoshiroCpp::Xoshiro256PlusPlus prng(seed);
+    std::uniform_int_distribution<size_t> distribution(0, std::numeric_limits<size_t>::max());
 
     for (size_t i = 0; i < CFG.TRIALS_NUMBER; i++)
     {
         generate_random_bit_array(prng, CFG.SIFTED_KEY_LENGTH, alice_bit_array);
         introduce_errors(prng, alice_bit_array, CFG.SIFTED_KEY_LENGTH, combination.QBER, bob_bit_array);
-        output_array_length = run_trial(alice_bit_array, bob_bit_array, CFG.SIFTED_KEY_LENGTH, combination.trial_combination, CFG.SHUFFLE_MODE, output_alice_bit_array, output_bob_bit_array);
+        output_array_length = run_trial(alice_bit_array, bob_bit_array, CFG.SIFTED_KEY_LENGTH, combination.trial_combination, CFG.SHUFFLE_MODE, distribution(prng), output_alice_bit_array, output_bob_bit_array);
 
         calculate_error_positions(output_alice_bit_array, output_bob_bit_array, output_array_length, error_positions_array);
         errors_number = std::accumulate(error_positions_array, error_positions_array + output_array_length, 0);
@@ -229,15 +229,21 @@ std::vector<test_result> run_simulation(const std::vector<test_combination> &com
     size_t iteration = 0;
     std::mt19937 prng(CFG.SIMULATION_SEED);
     std::uniform_int_distribution<size_t> distribution(0, std::numeric_limits<size_t>::max());
+    std::vector<size_t> seeds(combinations.size());
+    for (size_t i = 0; i < seeds.size(); i++)
+    {
+        seeds[i] = distribution(prng);
+    }
+
     pool.detach_loop<size_t>(0, combinations.size(),
-                             [&combinations, &results, &prng, &distribution, &bar, &iteration](size_t i)
+                             [&combinations, &results, &prng, &seeds, &bar, &iteration](size_t i)
                              {
                                  bar.set_option(option::PostfixText{
                                      std::to_string(iteration) + "/" + std::to_string(combinations.size())});
                                  bar.tick();
                                  iteration++;
 
-                                 results[i] = run_test(combinations[i], distribution(prng));
+                                 results[i] = run_test(combinations[i], seeds[i]);
                              });
     pool.wait();
     indicators::show_console_cursor(true);
